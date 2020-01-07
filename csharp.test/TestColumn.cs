@@ -25,12 +25,7 @@ namespace ParquetSharp.Test
                 });
             }
 
-            expectedPrimitives.Add(new ExpectedPrimitive
-            {
-                Type = typeof(bool),
-                PhysicalType = PhysicalType.Boolean,
-                Name = UnicodeCharactersGenerator.GetAllAsciiCharacters()
-            });
+            var columns = new List<Column>();
 
             foreach (var expected in expectedPrimitives)
             {
@@ -41,6 +36,7 @@ namespace ParquetSharp.Test
                 var type = expected.Type;
                 var isDecimal = type == typeof(decimal) || type == typeof(decimal?);
                 var column = new Column(type, expected.Name, expected.LogicalTypeOverride);
+                columns.Add(column);
 
                 using (var node = column.CreateSchemaNode())
                 {
@@ -58,6 +54,15 @@ namespace ParquetSharp.Test
                     Assert.AreEqual(expected.Length, primitive.TypeLength);
                     Assert.AreEqual(expected.LogicalType, primitive.LogicalType);
                 }
+            }
+
+            var groupNode = Column.CreateSchemaNode(columns.ToArray());
+
+            foreach (var unicodeString in UnicodeCharactersGenerator.GetCommonUsedUnicodeCharacterSets())
+            {
+                int nodeIndex = groupNode.FieldIndex(unicodeString);
+                Console.WriteLine("Column name - '{0}' has index '{1}'.", unicodeString, nodeIndex);
+                Assert.AreNotEqual(-1, nodeIndex);
             }
         }
 
