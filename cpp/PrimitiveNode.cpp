@@ -10,13 +10,16 @@ extern "C"
 {
 	PARQUETSHARP_EXPORT ExceptionInfo* PrimitiveNode_Make(
 		const char* const name, 
+		const int name_length,
 		const Repetition::type repetition, 
 		const std::shared_ptr<const LogicalType>* logical_type, 
 		const Type::type primitive_type, 
 		const int primitive_length, 
 		std::shared_ptr<schema::Node>** primitive_node)
 	{
-		TRYCATCH(*primitive_node = new std::shared_ptr<schema::Node>(schema::PrimitiveNode::Make(name, repetition, logical_type == nullptr ? nullptr : *logical_type, primitive_type, primitive_length));)
+		TRYCATCH(
+			std::string sname(name, name_length);
+			*primitive_node = new std::shared_ptr<schema::Node>(schema::PrimitiveNode::Make(sname, repetition, logical_type == nullptr ? nullptr : *logical_type, primitive_type, primitive_length));)
 	}
 
 	PARQUETSHARP_EXPORT ExceptionInfo* PrimitiveNode_Column_Order(const std::shared_ptr<schema::PrimitiveNode>* node, ColumnOrder::type* column_order)

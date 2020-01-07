@@ -15,6 +15,9 @@ namespace ParquetSharp
         public delegate IntPtr GetFunction<TValue>(IntPtr handle, out TValue value);
         public delegate IntPtr GetFunction<in TArg0, TValue>(IntPtr handle, TArg0 arg0, out TValue value);
 
+        public delegate IntPtr GetStringFunction(IntPtr handle, out IntPtr stringPtr, out int stringLength);
+        public delegate IntPtr GetStringAction(IntPtr handle, IntPtr stringPtr, int length, out int index);
+
         public static void Check(IntPtr exceptionInfo)
         {
             if (exceptionInfo == IntPtr.Zero)
@@ -40,6 +43,12 @@ namespace ParquetSharp
         {
             Check(getter(arg0, out var value));
             return value;
+        }
+
+        public static int Return(ParquetHandle handle, IntPtr stringPtr, int stringLength, GetStringAction getter)
+        {
+            Check(getter(handle.IntPtr, stringPtr, stringLength, out var index));
+            return index;
         }
 
         public static TValue Return<TArg0, TArg1, TValue>(TArg0 arg0, TArg1 arg1, GetAction<TArg0, TArg1, TValue> getter)
@@ -88,6 +97,21 @@ namespace ParquetSharp
             deleter?.Invoke(value);
             GC.KeepAlive(handle);
             return str;
+        }
+        public static string ReturnString(ParquetHandle handle, GetStringFunction getter, Action<IntPtr> deleter = null)
+        {
+            Check(getter(handle.IntPtr, out var stringValue, out int stringLength));
+            var str = StringFromNativeUtf8(stringValue, stringLength);
+            deleter?.Invoke(stringValue);
+            GC.KeepAlive(handle);
+            return str;
+        }
+
+        private static string StringFromNativeUtf8(IntPtr utf8StringValue, int stringLength)
+        {
+            byte[] buffer = new byte[stringLength];
+            Marshal.Copy(utf8StringValue, buffer, 0, buffer.Length);
+            return System.Text.Encoding.UTF8.GetString(buffer);
         }
 
         [DllImport(ParquetDll.Name)]

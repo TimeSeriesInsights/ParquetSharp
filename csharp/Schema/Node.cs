@@ -64,7 +64,7 @@ namespace ParquetSharp.Schema
         private static extern IntPtr Node_Logical_Type(IntPtr node, out IntPtr logicalType);
 
         [DllImport(ParquetDll.Name)]
-        private static extern IntPtr Node_Name(IntPtr node, out IntPtr name);
+        private static extern IntPtr Node_Name(IntPtr node, out IntPtr name, out int nameLength);
 
         [DllImport(ParquetDll.Name)]
         private static extern IntPtr Node_Node_Type(IntPtr node, out NodeType nodeType);

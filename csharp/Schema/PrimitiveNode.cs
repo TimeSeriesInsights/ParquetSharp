@@ -50,23 +50,34 @@ namespace ParquetSharp.Schema
                 TypeLength == primitiveNode.TypeLength;
         }
 
-        private static IntPtr Make(
-            string name,
-            Repetition repetition,
-            LogicalType logicalType,
-            PhysicalType physicalType,
-            int primitiveLength)
+        private unsafe static IntPtr Make(string name, Repetition repetition, LogicalType logicalType, PhysicalType physicalType, int primitiveLength)
         {
-            if (name == null) throw new ArgumentNullException(nameof(name));
+            if (name == null)
+                throw new ArgumentNullException(nameof(name));
+            IntPtr primitiveNode;
 
-            ExceptionInfo.Check(PrimitiveNode_Make(name, repetition, logicalType?.Handle.IntPtr ?? IntPtr.Zero, physicalType, primitiveLength, out var primitiveNode));
+            byte[] nameBuffer = System.Text.Encoding.UTF8.GetBytes(name);
+                       
+            fixed (byte* namePtr = nameBuffer) // not null terminated
+            {
+                ExceptionInfo.Check(
+                    PrimitiveNode.PrimitiveNode_Make(
+                        (IntPtr)namePtr,
+                        nameBuffer.Length,
+                        repetition,
+                        logicalType?.Handle.IntPtr ?? IntPtr.Zero,
+                        physicalType,
+                        primitiveLength,
+                        out primitiveNode));
+            }
+
             GC.KeepAlive(logicalType?.Handle);
             return primitiveNode;
         }
 
-        [DllImport(ParquetDll.Name, CharSet = CharSet.Ansi)]
+        [DllImport(ParquetDll.Name)]
         private static extern IntPtr PrimitiveNode_Make(
-            string name, Repetition repetition, IntPtr logicalType, PhysicalType type, int primitiveLength, out IntPtr primitiveNode);
+            IntPtr name, int nameLength, Repetition repetition, IntPtr logicalType, PhysicalType type, int primitiveLength, out IntPtr primitiveNode);
 
         [DllImport(ParquetDll.Name)]
         private static extern IntPtr PrimitiveNode_Column_Order(IntPtr node, out ColumnOrder columnOrder);

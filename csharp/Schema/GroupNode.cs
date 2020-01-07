@@ -25,9 +25,14 @@ namespace ParquetSharp.Schema
             return Create(ExceptionInfo.Return<int, IntPtr>(Handle, i, GroupNode_Field));
         }
 
-        public int FieldIndex(string name)
+        public unsafe int FieldIndex(string name)
         {
-            return ExceptionInfo.Return<string, int>(Handle, name, GroupNode_Field_Index_By_Name);
+            byte[] nameBuffer = System.Text.Encoding.UTF8.GetBytes(name);
+
+            fixed (byte* namePtr = nameBuffer) // not null terminated
+            {
+                return ExceptionInfo.Return(Handle, (IntPtr)namePtr, nameBuffer.Length, GroupNode_Field_Index_By_Name);
+            }
         }
 
         public int FieldIndex(Node node)
@@ -77,8 +82,8 @@ namespace ParquetSharp.Schema
         [DllImport(ParquetDll.Name)]
         private static extern IntPtr GroupNode_Field_Count(IntPtr groupNode, out int fieldCount);
 
-        [DllImport(ParquetDll.Name, CharSet = CharSet.Ansi)]
-        private static extern IntPtr GroupNode_Field_Index_By_Name(IntPtr groupNode, string name, out int index);
+        [DllImport(ParquetDll.Name)]
+        private static extern IntPtr GroupNode_Field_Index_By_Name(IntPtr groupNode, IntPtr name, int nameLength, out int index);
 
         [DllImport(ParquetDll.Name)]
         private static extern IntPtr GroupNode_Field_Index_By_Node(IntPtr groupNode, IntPtr node, out int index);
