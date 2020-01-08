@@ -10,7 +10,7 @@ extern "C"
 {
 	PARQUETSHARP_EXPORT ExceptionInfo* PrimitiveNode_Make(
 		const char* const name, 
-		const int name_length,
+		const size_t name_length,
 		const Repetition::type repetition, 
 		const std::shared_ptr<const LogicalType>* logical_type, 
 		const Type::type primitive_type, 

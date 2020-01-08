@@ -39,7 +39,7 @@ extern "C"
 		TRYCATCH(*field_count = (*group_node)->field_count();)
 	}
 
-	PARQUETSHARP_EXPORT ExceptionInfo* GroupNode_Field_Index_By_Name(const std::shared_ptr<schema::GroupNode>* group_node, const char* const name, const int name_length, int* index)
+	PARQUETSHARP_EXPORT ExceptionInfo* GroupNode_Field_Index_By_Name(const std::shared_ptr<schema::GroupNode>* group_node, const char* const name, const size_t name_length, int* index)
 	{
 		TRYCATCH(
 			std::string sname(name, name_length);
