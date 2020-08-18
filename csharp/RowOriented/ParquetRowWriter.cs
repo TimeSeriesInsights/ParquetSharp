@@ -13,13 +13,23 @@ namespace ParquetSharp.RowOriented
     {
         internal delegate void WriteAction(ParquetRowWriter<TTuple> parquetRowWriter, TTuple[] rows, int length);
 
-        internal ParquetRowWriter(string path, Column[] columns, WriteAction writeAction)
-            : this(new ParquetFileWriter(path, columns), writeAction)
+        internal ParquetRowWriter(
+            string path, 
+            Column[] columns, 
+            Compression compression,
+            IReadOnlyDictionary<string, string> keyValueMetadata, 
+            WriteAction writeAction)
+            : this(new ParquetFileWriter(path, columns, compression, keyValueMetadata), writeAction)
         {
         }
 
-        internal ParquetRowWriter(OutputStream outputStream, Column[] columns, WriteAction writeAction)
-            : this(new ParquetFileWriter(outputStream, columns), writeAction)
+        internal ParquetRowWriter(
+            OutputStream outputStream, 
+            Column[] columns,
+            Compression compression,
+            IReadOnlyDictionary<string, string> keyValueMetadata, 
+            WriteAction writeAction)
+            : this(new ParquetFileWriter(outputStream, columns, compression, keyValueMetadata), writeAction)
         {
         }
 
@@ -33,15 +43,14 @@ namespace ParquetSharp.RowOriented
 
         public void Dispose()
         {
-            if (_pos != 0)
-            {
-                _writeAction(this, _rows, _pos);
-                _pos = 0;
-            }
-
-            _rowGroupWriter?.Dispose();
-            _rowGroupWriter = null;
+            FlushAndDisposeRowGroup();
             _parquetFileWriter.Dispose();
+        }
+
+        public void Close()
+        {
+            FlushAndDisposeRowGroup();
+            _parquetFileWriter.Close();
         }
 
         public void StartNewRowGroup()
@@ -80,6 +89,18 @@ namespace ParquetSharp.RowOriented
             {
                 columnWriter.WriteBatch(values, 0, length);
             }
+        }
+
+        private void FlushAndDisposeRowGroup()
+        {
+            if (_rowGroupWriter != null)
+            {
+                _writeAction(this, _rows, _pos);
+                _pos = 0;
+            }
+
+            _rowGroupWriter?.Dispose();
+            _rowGroupWriter = null;
         }
 
         private readonly ParquetFileWriter _parquetFileWriter;

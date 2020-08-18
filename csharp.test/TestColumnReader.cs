@@ -15,32 +15,31 @@ namespace ParquetSharp.Test
             var schemaColumns = new Column[] {new Column<int>("int32_field")};
             var values = Enumerable.Range(0, numRows).ToArray();
 
-            using (var buffer = new ResizableBuffer())
+            using var buffer = new ResizableBuffer();
+
+            using (var outStream = new BufferOutputStream(buffer))
             {
-                using (var outStream = new BufferOutputStream(buffer))
-                using (var writer = new ParquetFileWriter(outStream, schemaColumns))
-                {
-                    using (var rowGroupWriter = writer.AppendRowGroup())
-                    {
-                        var colWriter = (ColumnWriter<int>) rowGroupWriter.NextColumn();
-                        colWriter.WriteBatch(numRows, values);
-                    }
-                }
+                using var writer = new ParquetFileWriter(outStream, schemaColumns);
+                using var rowGroupWriter = writer.AppendRowGroup();
+                using var colWriter = (ColumnWriter<int>) rowGroupWriter.NextColumn();
 
-                // Read back the columns and make sure they match.
-                using (var inStream = new BufferReader(buffer))
-                using (var fileReader = new ParquetFileReader(inStream))
-                using (var rowGroupReader = fileReader.RowGroup(0))
-                using (var column = (ColumnReader<int>) rowGroupReader.Column(0))
-                {
-                    var read = new int[1024];
-                    column.ReadBatch(1024, read, out var numValues);
+                colWriter.WriteBatch(values);
 
-                    Assert.AreEqual(numValues, numRows);
-                    Assert.AreEqual(values, read.AsSpan(0, numRows).ToArray());
-                    Assert.IsFalse(column.HasNext);
-                }
+                writer.Close();
             }
+
+            // Read back the columns and make sure they match.
+            using var inStream = new BufferReader(buffer);
+            using var fileReader = new ParquetFileReader(inStream);
+            using var rowGroupReader = fileReader.RowGroup(0);
+            using var column = (ColumnReader<int>) rowGroupReader.Column(0);
+
+            var read = new int[1024];
+            column.ReadBatch(1024, read, out var numValues);
+
+            Assert.AreEqual(numValues, numRows);
+            Assert.AreEqual(values, read.AsSpan(0, numRows).ToArray());
+            Assert.IsFalse(column.HasNext);
         }
 
         [Test]
@@ -50,48 +49,47 @@ namespace ParquetSharp.Test
 
             var schemaColumns = new Column[] { new Column<int>("int32_field") };
             var values = Enumerable.Range(0, numRows).ToArray();
+            
+            using var buffer = new ResizableBuffer();
 
-            using (var buffer = new ResizableBuffer())
+            using (var outStream = new BufferOutputStream(buffer))
             {
-                using (var outStream = new BufferOutputStream(buffer))
-                using (var writer = new ParquetFileWriter(outStream, schemaColumns))
-                {
-                    using (var rowGroupWriter = writer.AppendRowGroup())
-                    {
-                        var colWriter = (ColumnWriter<int>)rowGroupWriter.NextColumn();
-                        colWriter.WriteBatch(numRows, values);
-                    }
-                }
+                using var writer = new ParquetFileWriter(outStream, schemaColumns);
+                using var rowGroupWriter = writer.AppendRowGroup();
+                using var colWriter = (ColumnWriter<int>) rowGroupWriter.NextColumn();
 
-                using (var inStream = new BufferReader(buffer))
-                using (var fileReader = new ParquetFileReader(inStream))
-                using (var rowGroupReader = fileReader.RowGroup(0))
-                {
-                    // Read back the columns after skipping numRows and make sure the values are what we expect.
-                    using (var column = rowGroupReader.Column(0))
-                    {
-                        const int numToSkip = 5;
+                colWriter.WriteBatch(values);
 
-                        var skipped = column.Skip(numToSkip);
+                writer.Close();
+            }
 
-                        Assert.AreEqual(numToSkip, skipped);
+            using var inStream = new BufferReader(buffer);
+            using var fileReader = new ParquetFileReader(inStream);
+            using var rowGroupReader = fileReader.RowGroup(0);
 
-                        var read = new int[1024];
-                        ((ColumnReader<int>) column).ReadBatch(1024, read, out var numValues);
+            // Read back the columns after skipping numRows and make sure the values are what we expect.
+            using (var column = rowGroupReader.Column(0))
+            {
+                const int numToSkip = 5;
 
-                        Assert.AreEqual(numValues, numRows - numToSkip);
-                        Assert.AreEqual(values.AsSpan(numToSkip).ToArray(), read.AsSpan(0, numRows - numToSkip).ToArray());
-                    }
+                var skipped = column.Skip(numToSkip);
 
-                    // Check skipped is bound to the maximum number of rows.
-                    using (var column = rowGroupReader.Column(0))
-                    {
-                        var skipped = column.Skip(1024);
+                Assert.AreEqual(numToSkip, skipped);
 
-                        Assert.AreEqual(numRows, skipped);
-                        Assert.IsFalse(column.HasNext);
-                    }
-                }
+                var read = new int[1024];
+                ((ColumnReader<int>) column).ReadBatch(1024, read, out var numValues);
+
+                Assert.AreEqual(numValues, numRows - numToSkip);
+                Assert.AreEqual(values.AsSpan(numToSkip).ToArray(), read.AsSpan(0, numRows - numToSkip).ToArray());
+            }
+
+            // Check skipped is bound to the maximum number of rows.
+            using (var column = rowGroupReader.Column(0))
+            {
+                var skipped = column.Skip(1024);
+
+                Assert.AreEqual(numRows, skipped);
+                Assert.IsFalse(column.HasNext);
             }
         }
     }

@@ -1,6 +1,5 @@
 using System;
 using System.Linq;
-using System.Runtime.InteropServices;
 using ParquetSharp.IO;
 using NUnit.Framework;
 
@@ -10,98 +9,230 @@ namespace ParquetSharp.Test
     internal static class TestLogicalTypeRoundtrip
     {
         [Test]
-        public static void TestReaderWriteTypes(
+        public static void TestRoundTrip(
             // 2^i, 7^j, 11^k are mutually co-prime for i,j,k>0
             [Values(2, 8, 32, 128)] int rowsPerBatch,
             [Values(7, 49, 343, 2401)] int writeBufferLength,
-            [Values(11, 121, 1331)] int readBufferLength
+            [Values(11, 121, 1331)] int readBufferLength,
+            [Values(true, false)] bool useDictionaryEncoding
         )
         {
             var expectedColumns = CreateExpectedColumns();
             var schemaColumns = expectedColumns.Select(c => new Column(c.Values.GetType().GetElementType(), c.Name, c.LogicalTypeOverride)).ToArray();
 
-            using (var buffer = new ResizableBuffer())
+            using var buffer = new ResizableBuffer();
+
+            // Write our expected columns to the parquet in-memory file.
+            using (var outStream = new BufferOutputStream(buffer))
             {
-                // Write our expected columns to the parquet in-memory file.
-                using (var outStream = new BufferOutputStream(buffer))
-                using (var fileWriter = new ParquetFileWriter(outStream, schemaColumns))
-                using (var rowGroupWriter = fileWriter.AppendRowGroup())
-                {
-                    foreach (var column in expectedColumns)
-                    {
-                        Console.WriteLine("Writing '{0}' ({1})", column.Name, column.Values.GetType().GetElementType());
+                using var writerProperties = CreateWriterProperties(expectedColumns, useDictionaryEncoding);
+                using var fileWriter = new ParquetFileWriter(outStream, schemaColumns, writerProperties);
+                using var rowGroupWriter = fileWriter.AppendRowGroup();
 
-                        using (var columnWriter = rowGroupWriter.NextColumn().LogicalWriter(writeBufferLength))
-                        {
-                            columnWriter.Apply(new LogicalValueSetter(column.Values, rowsPerBatch));
-                        }
+                foreach (var column in expectedColumns)
+                {
+                    Console.WriteLine("Writing '{0}' ({1})", column.Name, column.Values.GetType().GetElementType());
+
+                    using var columnWriter = rowGroupWriter.NextColumn().LogicalWriter(writeBufferLength);
+                    columnWriter.Apply(new LogicalValueSetter(column.Values, rowsPerBatch));
+                }
+
+                fileWriter.Close();
+            }
+
+            Console.WriteLine();
+
+            // Read back the columns and make sure they match.
+            AssertReadRoundtrip(rowsPerBatch, readBufferLength, buffer, expectedColumns);
+        }
+
+        [Test]
+        public static void TestRoundTripBuffered(
+            // 2^i, 7^j, 11^k are mutually co-prime for i,j,k>0
+            [Values(2, 8, 32, 128)] int rowsPerBatch,
+            [Values(7, 49, 343, 2401)] int writeBufferLength,
+            [Values(11, 121, 1331)] int readBufferLength,
+            [Values(true, false)] bool useDictionaryEncoding
+        )
+        {
+            var expectedColumns = CreateExpectedColumns();
+            var schemaColumns = expectedColumns.Select(c => new Column(c.Values.GetType().GetElementType(), c.Name, c.LogicalTypeOverride)).ToArray();
+
+            using var buffer = new ResizableBuffer();
+
+            // Write our expected columns to the parquet in-memory file.
+            using (var outStream = new BufferOutputStream(buffer))
+            {
+                using var writerProperties = CreateWriterProperties(expectedColumns, useDictionaryEncoding);
+                using var fileWriter = new ParquetFileWriter(outStream, schemaColumns, writerProperties);
+                using var rowGroupWriter = fileWriter.AppendBufferedRowGroup();
+
+                const int rangeLength = 9;
+                
+                for (int r = 0; r < NumRows; r += rangeLength)
+                {
+                    for (var i = 0; i < expectedColumns.Length; i++)
+                    {
+                        var column = expectedColumns[i];
+                        var range = (r, Math.Min(r + rangeLength, NumRows));
+
+                        Console.WriteLine("Writing '{0}' (element type: {1}) (range: {2})", column.Name, column.Values.GetType().GetElementType(), range);
+
+                        using var columnWriter = rowGroupWriter.Column(i).LogicalWriter(writeBufferLength);
+                        columnWriter.Apply(new LogicalValueSetter(column.Values, rowsPerBatch, range));
                     }
                 }
 
-                Console.WriteLine();
+                fileWriter.Close();
+            }
 
-                // Read back the columns and make sure they match.
-                using (var inStream = new BufferReader(buffer))
-                using (var fileReader = new ParquetFileReader(inStream))
+            Console.WriteLine();
+
+            // Read back the columns and make sure they match.
+            AssertReadRoundtrip(rowsPerBatch, readBufferLength, buffer, expectedColumns);
+        }
+
+        private static WriterProperties CreateWriterProperties(ExpectedColumn[] expectedColumns, bool useDictionaryEncoding)
+        {
+            var builder = new WriterPropertiesBuilder();
+
+            builder.Compression(Compression.Lz4);
+
+            if (!useDictionaryEncoding)
+            {
+                foreach (var column in expectedColumns)
                 {
-                    var fileMetaData = fileReader.FileMetaData;
+                    builder.DisableDictionary(column.Name);
+                }
+            }
 
-                    using (var rowGroupReader = fileReader.RowGroup(0))
+            return builder.Build();
+        }
+
+        private static void AssertReadRoundtrip(int rowsPerBatch, int readBufferLength, ResizableBuffer buffer, ExpectedColumn[] expectedColumns)
+        {
+            using var inStream = new BufferReader(buffer);
+            using var fileReader = new ParquetFileReader(inStream);
+            using var fileMetaData = fileReader.FileMetaData;
+            using var rowGroupReader = fileReader.RowGroup(0);
+
+            var rowGroupMetaData = rowGroupReader.MetaData;
+            var numRows = rowGroupMetaData.NumRows;
+
+            for (int c = 0; c != fileMetaData.NumColumns; ++c)
+            {
+                var expected = expectedColumns[c];
+
+                // Test properties, and read methods.
+                using (var columnReader = rowGroupReader.Column(c).LogicalReader(readBufferLength))
+                {
+                    var descr = columnReader.ColumnDescriptor;
+                    var chunkMetaData = rowGroupMetaData.GetColumnChunkMetaData(c);
+                    var statistics = chunkMetaData.Statistics;
+
+                    Console.WriteLine("Reading '{0}'", expected.Name);
+
+                    Assert.AreEqual(expected.PhysicalType, descr.PhysicalType);
+                    Assert.AreEqual(expected.LogicalType, descr.LogicalType);
+                    Assert.AreEqual(expected.Values, columnReader.Apply(new LogicalValueGetter(checked((int) numRows), rowsPerBatch)));
+                    Assert.AreEqual(expected.Length, descr.TypeLength);
+                    Assert.AreEqual((expected.LogicalType as DecimalLogicalType)?.Precision ?? -1, descr.TypePrecision);
+                    Assert.AreEqual((expected.LogicalType as DecimalLogicalType)?.Scale ?? -1, descr.TypeScale);
+                    Assert.AreEqual(expected.HasStatistics, chunkMetaData.IsStatsSet);
+
+                    if (expected.HasStatistics)
                     {
-                        var rowGroupMetaData = rowGroupReader.MetaData;
-                        var numRows = rowGroupMetaData.NumRows;
+                        Assert.AreEqual(expected.HasMinMax, statistics.HasMinMax);
+                        //Assert.AreEqual(expected.NullCount, statistics.NullCount);
+                        //Assert.AreEqual(expected.NumValues, statistics.NumValues);
+                        Assert.AreEqual(expected.PhysicalType, statistics.PhysicalType);
 
-                        for (int c = 0; c != fileMetaData.NumColumns; ++c)
+                        // BUG Don't check for decimal until https://issues.apache.org/jira/browse/ARROW-6149 is fixed.
+                        var buggy = expected.LogicalType is DecimalLogicalType;
+
+                        if (expected.HasMinMax && !buggy)
                         {
-                            var expected = expectedColumns[c];
-
-                            // Test properties, and read methods.
-                            using (var columnReader = rowGroupReader.Column(c).LogicalReader(readBufferLength))
-                            {
-                                var descr = columnReader.ColumnDescriptor;
-                                var chunkMetaData = rowGroupMetaData.GetColumnChunkMetaData(c);
-                                var statistics = chunkMetaData.Statistics;
-
-                                Console.WriteLine("Reading '{0}'", expected.Name);
-
-                                Assert.AreEqual(expected.PhysicalType, descr.PhysicalType);
-                                Assert.AreEqual(expected.LogicalType, descr.LogicalType);
-                                Assert.AreEqual(expected.Values, columnReader.Apply(new LogicalValueGetter(checked((int) numRows), rowsPerBatch)));
-                                Assert.AreEqual(expected.Length, descr.TypeLength);
-                                Assert.AreEqual((expected.LogicalType as DecimalLogicalType)?.Precision ?? -1, descr.TypePrecision);
-                                Assert.AreEqual((expected.LogicalType as DecimalLogicalType)?.Scale ?? -1, descr.TypeScale);
-                                Assert.AreEqual(expected.HasStatistics, chunkMetaData.IsStatsSet);
-
-                                if (expected.HasStatistics)
-                                {
-                                    Assert.AreEqual(expected.HasMinMax, statistics.HasMinMax);
-                                    //Assert.AreEqual(expected.NullCount, statistics.NullCount);
-                                    //Assert.AreEqual(expected.NumValues, statistics.NumValues);
-                                    Assert.AreEqual(expected.PhysicalType, statistics.PhysicalType);
-
-                                    // BUG Don't check for decimal until https://issues.apache.org/jira/browse/ARROW-6149 is fixed.
-                                    var buggy = expected.LogicalType is DecimalLogicalType;
-
-                                    if (expected.HasMinMax && !buggy)
-                                    {
-                                        Assert.AreEqual(expected.Min, expected.Converter(statistics.MinUntyped));
-                                        Assert.AreEqual(expected.Max, expected.Converter(statistics.MaxUntyped));
-                                    }
-                                }
-                                else
-                                {
-                                    Assert.IsNull(statistics);
-                                }
-                            }
-
-                            // Test IEnumerable interface
-                            using (var columnReader = rowGroupReader.Column(c).LogicalReader(readBufferLength))
-                            {
-                                Assert.AreEqual(expected.Values, columnReader.Apply(new LogicalColumnReaderToArray()));
-                            }
+                            Assert.AreEqual(expected.Min, expected.Converter(statistics.MinUntyped));
+                            Assert.AreEqual(expected.Max, expected.Converter(statistics.MaxUntyped));
                         }
                     }
+                    else
+                    {
+                        Assert.IsNull(statistics);
+                    }
                 }
+
+                // Test IEnumerable interface
+                using (var columnReader = rowGroupReader.Column(c).LogicalReader(readBufferLength))
+                {
+                    Assert.AreEqual(expected.Values, columnReader.Apply(new LogicalColumnReaderToArray()));
+                }
+            }
+        }
+
+        [Test]
+        public static void TestBigFileBufferedRowGroup()
+        {
+            // Test a large amount of rows with a buffered row group to uncover any particular issue.
+            const int numBatches = 64;
+            const int batchSize = 8192;
+            
+            using var buffer = new ResizableBuffer();
+
+            using (var output = new BufferOutputStream(buffer))
+            {
+                var columns = new Column[]
+                {
+                    new Column<int>("int"),
+                    new Column<double>("double"),
+                    new Column<string>("string"),
+                    new Column<bool>("bool")
+                };
+
+                using var builder = new WriterPropertiesBuilder();
+                using var writerProperties = builder.Compression(Compression.Snappy).DisableDictionary("double").Build();
+                using var fileWriter = new ParquetFileWriter(output, columns, writerProperties);
+                using var rowGroupWriter = fileWriter.AppendBufferedRowGroup();
+
+                using var col0 = rowGroupWriter.Column(0).LogicalWriter<int>();
+                using var col1 = rowGroupWriter.Column(1).LogicalWriter<double>();
+                using var col2 = rowGroupWriter.Column(2).LogicalWriter<string>();
+                using var col3 = rowGroupWriter.Column(3).LogicalWriter<bool>();
+
+                for (var batchIndex = 0; batchIndex < numBatches; ++batchIndex)
+                {
+                    var startIndex = batchSize * batchIndex;
+
+                    col0.WriteBatch(Enumerable.Range(startIndex, batchSize).ToArray());
+                    col1.WriteBatch(Enumerable.Range(startIndex, batchSize).Select(i => (double) i).ToArray());
+                    col2.WriteBatch(Enumerable.Range(startIndex, batchSize).Select(i => i.ToString()).ToArray());
+                    col3.WriteBatch(Enumerable.Range(startIndex, batchSize).Select(i => i % 2 == 0).ToArray());
+                }
+
+                fileWriter.Close();
+            }
+
+            using (var input = new BufferReader(buffer))
+            {
+                using var fileReader = new ParquetFileReader(input);
+                using var rowGroupReader = fileReader.RowGroup(0);
+
+                using var col0 = rowGroupReader.Column(0).LogicalReader<int>();
+                using var col1 = rowGroupReader.Column(1).LogicalReader<double>();
+                using var col2 = rowGroupReader.Column(2).LogicalReader<string>();
+                using var col3 = rowGroupReader.Column(3).LogicalReader<bool>();
+
+                for (var batchIndex = 0; batchIndex < numBatches; ++batchIndex)
+                {
+                    var startIndex = batchSize * batchIndex;
+
+                    Assert.AreEqual(Enumerable.Range(startIndex, batchSize).ToArray(), col0.ReadAll(batchSize));
+                    Assert.AreEqual(Enumerable.Range(startIndex, batchSize).Select(i => (double)i).ToArray(), col1.ReadAll(batchSize));
+                    Assert.AreEqual(Enumerable.Range(startIndex, batchSize).Select(i => i.ToString()).ToArray(), col2.ReadAll(batchSize));
+                    Assert.AreEqual(Enumerable.Range(startIndex, batchSize).Select(i => i % 2 == 0).ToArray(), col3.ReadAll(batchSize));
+                }
+
+                fileReader.Close();
             }
         }
 
@@ -123,27 +254,28 @@ namespace ParquetSharp.Test
                 expected[i] = ar;
             }
 
-            using (var buffer = new ResizableBuffer())
-            {
-                // Write out a single column
-                using (var outStream = new BufferOutputStream(buffer))
-                using (var fileWriter = new ParquetFileWriter(outStream, new Column[] {new Column<float[]>("big_array_field")}))
-                using (var rowGroupWriter = fileWriter.AppendRowGroup())
-                using (var colWriter = rowGroupWriter.NextColumn().LogicalWriter<float[]>())
-                {
-                    colWriter.WriteBatch(expected);
-                }
+            using var buffer = new ResizableBuffer();
 
-                // Read it back.
-                using (var inStream = new BufferReader(buffer))
-                using (var fileReader = new ParquetFileReader(inStream))
-                using (var rowGroup = fileReader.RowGroup(0))
-                using (var columnReader = rowGroup.Column(0).LogicalReader<float[]>())
-                {
-                    var allData = columnReader.ReadAll((int) rowGroup.MetaData.NumRows);
-                    Assert.AreEqual(expected, allData);
-                }
+            // Write out a single column
+            using (var outStream = new BufferOutputStream(buffer))
+            {
+                using var fileWriter = new ParquetFileWriter(outStream, new Column[] {new Column<float[]>("big_array_field")});
+                using var rowGroupWriter = fileWriter.AppendRowGroup();
+                using var colWriter = rowGroupWriter.NextColumn().LogicalWriter<float[]>();
+
+                colWriter.WriteBatch(expected);
+
+                fileWriter.Close();
             }
+
+            // Read it back.
+            using var inStream = new BufferReader(buffer);
+            using var fileReader = new ParquetFileReader(inStream);
+            using var rowGroup = fileReader.RowGroup(0);
+            using var columnReader = rowGroup.Column(0).LogicalReader<float[]>();
+
+            var allData = columnReader.ReadAll((int) rowGroup.MetaData.NumRows);
+            Assert.AreEqual(expected, allData);
         }
 
         [Test]
@@ -163,26 +295,27 @@ namespace ParquetSharp.Test
                 new double?[][] {new double?[] { }}
             };
 
-            using (var buffer = new ResizableBuffer())
-            {
-                using (var outStream = new BufferOutputStream(buffer))
-                using (var fileWriter = new ParquetFileWriter(outStream, new Column[] {new Column<double?[][]>("a")}))
-                using (var rowGroupWriter = fileWriter.AppendRowGroup())
-                using (var colWriter = rowGroupWriter.NextColumn().LogicalWriter<double?[][]>())
-                {
-                    colWriter.WriteBatch(expected);
-                }
+            using var buffer = new ResizableBuffer();
 
-                using (var inStream = new BufferReader(buffer))
-                using (var fileReader = new ParquetFileReader(inStream))
-                using (var rowGroup = fileReader.RowGroup(0))
-                using (var columnReader = rowGroup.Column(0).LogicalReader<double?[][]>())
-                {
-                    Assert.AreEqual(4, rowGroup.MetaData.NumRows);
-                    var allData = columnReader.ReadAll(4);
-                    Assert.AreEqual(expected, allData);
-                }
+            using (var outStream = new BufferOutputStream(buffer))
+            {
+                using var fileWriter = new ParquetFileWriter(outStream, new Column[] {new Column<double?[][]>("a")});
+                using var rowGroupWriter = fileWriter.AppendRowGroup();
+                using var colWriter = rowGroupWriter.NextColumn().LogicalWriter<double?[][]>();
+
+                colWriter.WriteBatch(expected);
+
+                fileWriter.Close();
             }
+
+            using var inStream = new BufferReader(buffer);
+            using var fileReader = new ParquetFileReader(inStream);
+            using var rowGroup = fileReader.RowGroup(0);
+            using var columnReader = rowGroup.Column(0).LogicalReader<double?[][]>();
+
+            Assert.AreEqual(4, rowGroup.MetaData.NumRows);
+            var allData = columnReader.ReadAll(4);
+            Assert.AreEqual(expected, allData);
         }
 
         [Test]
@@ -196,26 +329,27 @@ namespace ParquetSharp.Test
                 new string[] { }
             };
 
-            using (var buffer = new ResizableBuffer())
-            {
-                using (var outStream = new BufferOutputStream(buffer))
-                using (var fileWriter = new ParquetFileWriter(outStream, new Column[] {new Column<string[]>("a")}))
-                using (var rowGroupWriter = fileWriter.AppendRowGroup())
-                using (var colWriter = rowGroupWriter.NextColumn().LogicalWriter<string[]>())
-                {
-                    colWriter.WriteBatch(expected);
-                }
+            using var buffer = new ResizableBuffer();
 
-                using (var inStream = new BufferReader(buffer))
-                using (var fileReader = new ParquetFileReader(inStream))
-                using (var rowGroup = fileReader.RowGroup(0))
-                using (var columnReader = rowGroup.Column(0).LogicalReader<string[]>())
-                {
-                    Assert.AreEqual(4, rowGroup.MetaData.NumRows);
-                    var allData = columnReader.ReadAll(4);
-                    Assert.AreEqual(expected, allData);
-                }
+            using (var outStream = new BufferOutputStream(buffer))
+            {
+                using var fileWriter = new ParquetFileWriter(outStream, new Column[] {new Column<string[]>("a")});
+                using var rowGroupWriter = fileWriter.AppendRowGroup();
+                using var colWriter = rowGroupWriter.NextColumn().LogicalWriter<string[]>();
+
+                colWriter.WriteBatch(expected);
+
+                fileWriter.Close();
             }
+
+            using var inStream = new BufferReader(buffer);
+            using var fileReader = new ParquetFileReader(inStream);
+            using var rowGroup = fileReader.RowGroup(0);
+            using var columnReader = rowGroup.Column(0).LogicalReader<string[]>();
+
+            Assert.AreEqual(4, rowGroup.MetaData.NumRows);
+            var allData = columnReader.ReadAll(4);
+            Assert.AreEqual(expected, allData);
         }
 
         private static ExpectedColumn[] CreateExpectedColumns()
@@ -462,7 +596,7 @@ namespace ParquetSharp.Test
                     Values = Enumerable.Range(0, NumRows).Select(i => ((decimal) i * i * i) / 1000 - 10).ToArray(),
                     Min = -10m,
                     Max = ((NumRows-1m) * (NumRows-1m) * (NumRows-1m)) / 1000 - 10,
-                    Converter = v => DecimalConverter(v, 3)
+                    Converter = v => LogicalRead.ToDecimal((FixedLenByteArray) v, 3)
                 },
                 new ExpectedColumn
                 {
@@ -476,7 +610,33 @@ namespace ParquetSharp.Test
                     NumValues = NumRows - (NumRows + 10) / 11,
                     Min = -9.999m,
                     Max = ((NumRows-1m) * (NumRows-1m) * (NumRows-1m)) / 1000 - 10,
-                    Converter = v => DecimalConverter(v, 3)
+                    Converter = v => LogicalRead.ToDecimal((FixedLenByteArray) v, 3)
+                },
+                new ExpectedColumn
+                {
+                    Name = "uuid_field",
+                    PhysicalType = PhysicalType.FixedLenByteArray,
+                    LogicalType = LogicalType.Uuid(),
+                    LogicalTypeOverride = LogicalType.Uuid(),
+                    Length = 16,
+                    Values = Enumerable.Range(0, NumRows).Select(i => new Guid(i, 0x1234, 0x5678, 0x9A, 0xBC, 0xDE, 0xF0, 0x12, 0x34, 0x56, 0x7F)).ToArray(),
+                    Min = new Guid(0, 0x1234, 0x5678, 0x9A, 0xBC, 0xDE, 0xF0, 0x12, 0x34, 0x56, 0x7F),
+                    Max = new Guid(NumRows - 1, 0x1234, 0x5678, 0x9A, 0xBC, 0xDE, 0xF0, 0x12, 0x34, 0x56, 0x7F),
+                    Converter = v => LogicalRead.ToUuid((FixedLenByteArray) v)
+                },
+                new ExpectedColumn
+                {
+                    Name = "uuid?_field",
+                    PhysicalType = PhysicalType.FixedLenByteArray,
+                    LogicalType = LogicalType.Uuid(),
+                    LogicalTypeOverride = LogicalType.Uuid(),
+                    Length = 16,
+                    Values = Enumerable.Range(0, NumRows).Select(i => i % 11 == 0 ? null : (Guid?) new Guid(i, 0x1234, 0x5678, 0x9A, 0xBC, 0xDE, 0xF0, 0x12, 0x34, 0x56, 0x7F)).ToArray(),
+                    NullCount = (NumRows + 10) / 11,
+                    NumValues = NumRows - (NumRows + 10) / 11,
+                    Min = new Guid(1, 0x1234, 0x5678, 0x9A, 0xBC, 0xDE, 0xF0, 0x12, 0x34, 0x56, 0x7F),
+                    Max = new Guid(NumRows - 1, 0x1234, 0x5678, 0x9A, 0xBC, 0xDE, 0xF0, 0x12, 0x34, 0x56, 0x7F),
+                    Converter = v => LogicalRead.ToUuid((FixedLenByteArray) v)
                 },
                 new ExpectedColumn
                 {
@@ -506,7 +666,7 @@ namespace ParquetSharp.Test
                     Values = Enumerable.Range(0, NumRows).Select(i => new DateTime(2018, 01, 01) + TimeSpan.FromHours(i)).ToArray(),
                     Min = new DateTime(2018, 01, 01),
                     Max = new DateTime(2018, 01, 01) + TimeSpan.FromHours(NumRows - 1),
-                    Converter = DateTimeMicrosConverter
+                    Converter = v => LogicalRead.ToDateTimeMicros((long) v)
                 },
                 new ExpectedColumn
                 {
@@ -518,7 +678,7 @@ namespace ParquetSharp.Test
                     NumValues = NumRows - (NumRows + 10) / 11,
                     Min = new DateTime(2018, 01, 01) + TimeSpan.FromHours(1),
                     Max = new DateTime(2018, 01, 01) + TimeSpan.FromHours(NumRows - 1),
-                    Converter = DateTimeMicrosConverter
+                    Converter = v => LogicalRead.ToDateTimeMicros((long) v)
                 },
                 new ExpectedColumn
                 {
@@ -529,7 +689,7 @@ namespace ParquetSharp.Test
                     Values = Enumerable.Range(0, NumRows).Select(i => new DateTime(2018, 01, 01) + TimeSpan.FromHours(i)).ToArray(),
                     Min = new DateTime(2018, 01, 01),
                     Max = new DateTime(2018, 01, 01) + TimeSpan.FromHours(NumRows - 1),
-                    Converter = DateTimeMillisConverter
+                    Converter = v => LogicalRead.ToDateTimeMillis((long) v)
                 },
                 new ExpectedColumn
                 {
@@ -542,7 +702,7 @@ namespace ParquetSharp.Test
                     NumValues = NumRows - (NumRows + 10) / 11,
                     Min = new DateTime(2018, 01, 01) + TimeSpan.FromHours(1),
                     Max = new DateTime(2018, 01, 01) + TimeSpan.FromHours(NumRows - 1),
-                    Converter = DateTimeMillisConverter
+                    Converter = v => LogicalRead.ToDateTimeMillis((long) v)
                 },
                 new ExpectedColumn
                 {
@@ -552,7 +712,7 @@ namespace ParquetSharp.Test
                     Values = Enumerable.Range(0, NumRows).Select(i => new DateTimeNanos(new DateTime(2018, 01, 01) + TimeSpan.FromHours(i))).ToArray(),
                     Min = new DateTimeNanos(new DateTime(2018, 01, 01)),
                     Max = new DateTimeNanos(new DateTime(2018, 01, 01) + TimeSpan.FromHours(NumRows - 1)),
-                    Converter = DateTimeNanosConverter
+                    Converter = v => new DateTimeNanos((long) v)
                 },
                 new ExpectedColumn
                 {
@@ -564,7 +724,7 @@ namespace ParquetSharp.Test
                     NumValues = NumRows - (NumRows + 10) / 11,
                     Min = new DateTimeNanos(new DateTime(2018, 01, 01) + TimeSpan.FromHours(1)),
                     Max = new DateTimeNanos(new DateTime(2018, 01, 01) + TimeSpan.FromHours(NumRows - 1)),
-                    Converter = DateTimeNanosConverter
+                    Converter = v => new DateTimeNanos((long) v)
                 },
                 new ExpectedColumn
                 {
@@ -574,7 +734,7 @@ namespace ParquetSharp.Test
                     Values = Enumerable.Range(0, NumRows).Select(i => TimeSpan.FromHours(-13) + TimeSpan.FromHours(i)).ToArray(),
                     Min = TimeSpan.FromHours(-13),
                     Max = TimeSpan.FromHours(-13 + NumRows - 1),
-                    Converter = TimeSpanMicrosConverter
+                    Converter = v => LogicalRead.ToTimeSpanMicros((long) v)
                 },
                 new ExpectedColumn
                 {
@@ -586,7 +746,7 @@ namespace ParquetSharp.Test
                     NumValues = NumRows - (NumRows + 10) / 11,
                     Min = TimeSpan.FromHours(-13 + 1),
                     Max = TimeSpan.FromHours(-13 + NumRows - 1),
-                    Converter = TimeSpanMicrosConverter
+                    Converter = v => LogicalRead.ToTimeSpanMicros((long) v)
                 },
                 new ExpectedColumn
                 {
@@ -597,7 +757,7 @@ namespace ParquetSharp.Test
                     Values = Enumerable.Range(0, NumRows).Select(i => TimeSpan.FromHours(-13) + TimeSpan.FromHours(i)).ToArray(),
                     Min = TimeSpan.FromHours(-13),
                     Max = TimeSpan.FromHours(-13 + NumRows - 1),
-                    Converter = TimeSpanMillisConverter
+                    Converter = v => LogicalRead.ToTimeSpanMillis((int) v)
                 },
                 new ExpectedColumn
                 {
@@ -610,21 +770,21 @@ namespace ParquetSharp.Test
                     NumValues = NumRows - (NumRows + 10) / 11,
                     Min = TimeSpan.FromHours(-13 + 1),
                     Max = TimeSpan.FromHours(-13 + NumRows - 1),
-                    Converter = TimeSpanMillisConverter
+                    Converter = v => LogicalRead.ToTimeSpanMillis((int) v)
                 },
                 new ExpectedColumn
                 {
-                    Name = "timespan_millis_field",
+                    Name = "timespan_nanos_field",
                     PhysicalType = PhysicalType.Int64,
                     LogicalType = LogicalType.Time(true, TimeUnit.Nanos),
                     Values = Enumerable.Range(0, NumRows).Select(i => new TimeSpanNanos(TimeSpan.FromHours(-13) + TimeSpan.FromHours(i))).ToArray(),
                     Min = new TimeSpanNanos(TimeSpan.FromHours(-13)),
                     Max = new TimeSpanNanos(TimeSpan.FromHours(-13 + NumRows - 1)),
-                    Converter = TimeSpanNanosConverter
+                    Converter = v => new TimeSpanNanos((long) v)
                 },
                 new ExpectedColumn
                 {
-                    Name = "timespan?_millis_field",
+                    Name = "timespan?_nanos_field",
                     PhysicalType = PhysicalType.Int64,
                     LogicalType = LogicalType.Time(true, TimeUnit.Nanos),
                     Values = Enumerable.Range(0, NumRows).Select(i => i % 11 == 0 ? (TimeSpanNanos?) null : new TimeSpanNanos(TimeSpan.FromHours(-13) + TimeSpan.FromHours(i))).ToArray(),
@@ -632,7 +792,7 @@ namespace ParquetSharp.Test
                     NumValues = NumRows - (NumRows + 10) / 11,
                     Min = new TimeSpanNanos(TimeSpan.FromHours(-13 + 1)),
                     Max = new TimeSpanNanos(TimeSpan.FromHours(-13 + NumRows - 1)),
-                    Converter = TimeSpanNanosConverter
+                    Converter = v => new TimeSpanNanos((long) v)
                 },
                 new ExpectedColumn
                 {
@@ -644,7 +804,7 @@ namespace ParquetSharp.Test
                     NumValues = NumRows - (NumRows + 17) / 18,
                     Min = "",
                     Max = "Hello, 98!",
-                    Converter = StringConverter
+                    Converter = v => LogicalRead.ToString((ByteArray) v)
                 },
                 new ExpectedColumn
                 {
@@ -657,7 +817,7 @@ namespace ParquetSharp.Test
                     NumValues = NumRows - (NumRows + 8) / 9,
                     Min = "{ \"id\", 1 }",
                     Max = "{ \"id\", 98 }",
-                    Converter = StringConverter
+                    Converter = v => LogicalRead.ToString((ByteArray) v)
                 },
                 new ExpectedColumn
                 {
@@ -668,7 +828,7 @@ namespace ParquetSharp.Test
                     NumValues = NumRows - (NumRows + 5) / 6,
                     Min = new byte[0],
                     Max = BitConverter.GetBytes(NumRows - 1),
-                    Converter = ByteArrayConverter
+                    Converter = v => LogicalRead.ToByteArray((ByteArray) v)
                 },
                 new ExpectedColumn
                 {
@@ -681,7 +841,7 @@ namespace ParquetSharp.Test
                     NumValues = NumRows - (NumRows + 2) / 3,
                     Min = BitConverter.GetBytes(1),
                     Max = BitConverter.GetBytes(NumRows - 1),
-                    Converter = ByteArrayConverter
+                    Converter = v => LogicalRead.ToByteArray((ByteArray) v)
                 },
                 new ExpectedColumn
                 {
@@ -794,65 +954,9 @@ namespace ParquetSharp.Test
                     NumValues = (NumRows / 3 + 1) * 3,
                     Min = BitConverter.GetBytes(0),
                     Max = BitConverter.GetBytes(252),
-                    Converter = ByteArrayConverter
+                    Converter = v => LogicalRead.ToByteArray((ByteArray) v)
                 }
             };
-        }
-
-        private static unsafe object DecimalConverter(object v, int scale)
-        {
-            var multiplier = Decimal128.GetScaleMultiplier(scale);
-            return (*(Decimal128*) ((FixedLenByteArray) v).Pointer).ToDecimal(multiplier);
-        }
-
-        private static object DateTimeMicrosConverter(object v)
-        {
-            return new DateTime(1970, 01, 01).AddTicks((long) v * (TimeSpan.TicksPerMillisecond / 1000));
-        }
-
-        private static object DateTimeMillisConverter(object v)
-        {
-            return new DateTime(1970, 01, 01).AddTicks((long) v * TimeSpan.TicksPerMillisecond);
-        }
-
-        private static object DateTimeNanosConverter(object v)
-        {
-            return new DateTimeNanos((long) v);
-        }
-
-        private static object TimeSpanMicrosConverter(object v)
-        {
-            return TimeSpan.FromTicks((long) v * (TimeSpan.TicksPerMillisecond / 1000));
-        }
-
-        private static object TimeSpanMillisConverter(object v)
-        {
-            return TimeSpan.FromTicks((int) v * TimeSpan.TicksPerMillisecond);
-        }
-
-        private static object TimeSpanNanosConverter(object v)
-        {
-            return new TimeSpanNanos((long) v);
-        }
-
-        private static object ByteArrayConverter(object v)
-        {
-            var byteArray = (ByteArray) v;
-            var array = new byte[byteArray.Length];
-            if (byteArray.Length != 0)
-            {
-                Marshal.Copy(byteArray.Pointer, array, 0, array.Length);
-            }
-
-            return array;
-        }
-
-        private static unsafe object StringConverter(object v)
-        {
-            var byteArray = (ByteArray) v;
-            return byteArray.Length == 0
-                ? string.Empty
-                : System.Text.Encoding.UTF8.GetString((byte*) byteArray.Pointer, byteArray.Length);
         }
 
         private sealed class ExpectedColumn

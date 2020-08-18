@@ -4,6 +4,9 @@ using ParquetSharp.Schema;
 
 namespace ParquetSharp
 {
+    /// <summary>
+    /// Builder pattern for WriterProperties.
+    /// </summary>
     public sealed class WriterPropertiesBuilder : IDisposable
     {
         public WriterPropertiesBuilder()
@@ -137,6 +140,28 @@ namespace ParquetSharp
             return this;
         }
 
+        public WriterPropertiesBuilder CompressionLevel(int compressionLevel)
+        {
+            ExceptionInfo.Check(WriterPropertiesBuilder_Compression_Level(_handle.IntPtr, compressionLevel));
+            GC.KeepAlive(_handle);
+            return this;
+        }
+
+        public WriterPropertiesBuilder CompressionLevel(string path, int compressionLevel)
+        {
+            ExceptionInfo.Check(WriterPropertiesBuilder_Compression_Level_By_Path(_handle.IntPtr, path, compressionLevel));
+            GC.KeepAlive(_handle);
+            return this;
+        }
+
+        public WriterPropertiesBuilder CompressionLevel(ColumnPath path, int compressionLevel)
+        {
+            ExceptionInfo.Check(WriterPropertiesBuilder_Compression_Level_By_ColumnPath(_handle.IntPtr, path.Handle.IntPtr, compressionLevel));
+            GC.KeepAlive(_handle);
+            GC.KeepAlive(path);
+            return this;
+        }
+
         public WriterPropertiesBuilder CreatedBy(string createdBy)
         {
             ExceptionInfo.Check(WriterPropertiesBuilder_Created_By(_handle.IntPtr, createdBy));
@@ -177,6 +202,14 @@ namespace ParquetSharp
             ExceptionInfo.Check(WriterPropertiesBuilder_Encoding_By_ColumnPath(_handle.IntPtr, path.Handle.IntPtr, encoding));
             GC.KeepAlive(_handle);
             GC.KeepAlive(path);
+            return this;
+        }
+
+        public WriterPropertiesBuilder Encryption(FileEncryptionProperties fileEncryptionProperties)
+        {
+            ExceptionInfo.Check(WriterPropertiesBuilder_Encryption(_handle.IntPtr, fileEncryptionProperties?.Handle.IntPtr ?? IntPtr.Zero));
+            GC.KeepAlive(_handle);
+            GC.KeepAlive(fileEncryptionProperties);
             return this;
         }
 
@@ -260,6 +293,15 @@ namespace ParquetSharp
         [DllImport(ParquetDll.Name)]
         private static extern IntPtr WriterPropertiesBuilder_Compression_By_ColumnPath(IntPtr builder, IntPtr path, Compression codec);
 
+        [DllImport(ParquetDll.Name)]
+        private static extern IntPtr WriterPropertiesBuilder_Compression_Level(IntPtr builder, int compressionLevel);
+
+        [DllImport(ParquetDll.Name, CharSet = CharSet.Ansi)]
+        private static extern IntPtr WriterPropertiesBuilder_Compression_Level_By_Path(IntPtr builder, string path, int compressionLevel);
+
+        [DllImport(ParquetDll.Name)]
+        private static extern IntPtr WriterPropertiesBuilder_Compression_Level_By_ColumnPath(IntPtr builder, IntPtr path, int compressionLevel);
+
         [DllImport(ParquetDll.Name, CharSet = CharSet.Ansi)]
         private static extern IntPtr WriterPropertiesBuilder_Created_By(IntPtr builder, string createdBy);
 
@@ -277,6 +319,9 @@ namespace ParquetSharp
 
         [DllImport(ParquetDll.Name)]
         private static extern IntPtr WriterPropertiesBuilder_Encoding_By_ColumnPath(IntPtr builder, IntPtr path, Encoding encodingType);
+
+        [DllImport(ParquetDll.Name)]
+        private static extern IntPtr WriterPropertiesBuilder_Encryption(IntPtr builder, IntPtr fileEncryptionProperties);
 
         [DllImport(ParquetDll.Name)]
         private static extern IntPtr WriterPropertiesBuilder_Max_Row_Group_Length(IntPtr builder, long maxRowGroupLength);
