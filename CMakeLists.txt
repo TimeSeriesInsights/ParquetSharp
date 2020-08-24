@@ -15,10 +15,13 @@ set(CMAKE_DEBUG_POSTFIX d)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/bin)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/bin)
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/")
-# set(CMAKE_PREFIX_PATH "F:/Temporary/Parquet/20180517/x64-windows-static" CACHE STRING "The default location for CMake to look libraries in.")
+set (CMAKE_CXX_STANDARD 11)
 
-set(BOOST_LIBRARYDIR "${CMAKE_PREFIX_PATH}/debug/lib")
-set(ZLIB_ROOT "${CMAKE_PREFIX_PATH}/debug")
+foreach (OUTPUTCONFIG ${CMAKE_CONFIGURATION_TYPES})
+    string(TOUPPER ${OUTPUTCONFIG} OUTPUTCONFIG)
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${OUTPUTCONFIG} ${PROJECT_SOURCE_DIR}/bin)
+    set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_${OUTPUTCONFIG} ${PROJECT_SOURCE_DIR}/bin)
+endforeach()
 
 if (MSVC)
 
@@ -28,19 +31,22 @@ if (MSVC)
 		endif()
 	endforeach()
 
-	add_compile_options("/MP")
+	add_compile_options("/MP") # Compile files in parallel.
+	add_compile_options("/WX") # Threat warnings as errors.
 
 endif ()
 
 if (UNIX)
 	
 	set(CMAKE_SHARED_LIBRARY_PREFIX )
-	set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--no-undefined")
 
 	add_compile_options("-Wall")
-	add_compile_options("-fvisibility=hidden")
+	add_compile_options("-Werror")
+	add_compile_options("-fvisibility-inlines-hidden")
 
-	# TODO call strip --strip-unneeded on the generated shared library
+  if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--no-undefined")
+  endif()
 
 endif ()
 

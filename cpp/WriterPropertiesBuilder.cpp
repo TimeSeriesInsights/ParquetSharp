@@ -105,6 +105,21 @@ extern "C"
 		TRYCATCH(builder->compression(*path, codec);)
 	}
 
+	PARQUETSHARP_EXPORT ExceptionInfo* WriterPropertiesBuilder_Compression_Level(WriterProperties::Builder* builder, int32_t compression_level)
+	{
+		TRYCATCH(builder->compression_level(compression_level);)
+	}
+
+	PARQUETSHARP_EXPORT ExceptionInfo* WriterPropertiesBuilder_Compression_Level_By_Path(WriterProperties::Builder* builder, const char* path, int32_t compression_level)
+	{
+		TRYCATCH(builder->compression_level(path, compression_level);)
+	}
+
+	PARQUETSHARP_EXPORT ExceptionInfo* WriterPropertiesBuilder_Compression_Level_By_ColumnPath(WriterProperties::Builder* builder, const std::shared_ptr<schema::ColumnPath>* path, int32_t compression_level)
+	{
+		TRYCATCH(builder->compression_level(*path, compression_level);)
+	}
+
 	PARQUETSHARP_EXPORT ExceptionInfo* WriterPropertiesBuilder_Created_By(WriterProperties::Builder* builder, const char* created_by)
 	{
 		TRYCATCH(builder->created_by(created_by);)
@@ -133,6 +148,11 @@ extern "C"
 	PARQUETSHARP_EXPORT ExceptionInfo* WriterPropertiesBuilder_Encoding_By_ColumnPath(WriterProperties::Builder* builder, const std::shared_ptr<schema::ColumnPath>* path, Encoding::type encoding_type)
 	{
 		TRYCATCH(builder->encoding(*path, encoding_type);)
+	}
+
+	PARQUETSHARP_EXPORT ExceptionInfo* WriterPropertiesBuilder_Encryption(WriterProperties::Builder* builder, const std::shared_ptr<FileEncryptionProperties>* file_encryption_properties)
+	{
+		TRYCATCH(builder->encryption(file_encryption_properties ? *file_encryption_properties : nullptr);)
 	}
 
 	PARQUETSHARP_EXPORT ExceptionInfo* WriterPropertiesBuilder_Max_Row_Group_Length(WriterProperties::Builder* builder, int64_t max_row_group_length)

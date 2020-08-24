@@ -34,26 +34,24 @@ namespace ParquetSharp.Test
                 Assert.True(Column.IsSupported(expected.Type));
 
                 var type = expected.Type;
-                var isDecimal = type == typeof(decimal) || type == typeof(decimal?);
                 var column = new Column(type, expected.Name, expected.LogicalTypeOverride);
                 columns.Add(column);
 
-                using (var node = column.CreateSchemaNode())
-                {
-                    Assert.AreEqual(expected.LogicalType, node.LogicalType);
-                    Assert.AreEqual(-1, node.Id);
-                    Assert.AreEqual(expected.Name, node.Name);
-                    Assert.AreEqual(NodeType.Primitive, node.NodeType);
-                    Assert.AreEqual(null, node.Parent);
-                    Assert.AreEqual(expected.Repetition, node.Repetition);
+                using var node = column.CreateSchemaNode();
 
-                    var primitive = (PrimitiveNode) node;
+                Assert.AreEqual(expected.LogicalType, node.LogicalType);
+                Assert.AreEqual(-1, node.FieldId);
+                Assert.AreEqual(expected.Name, node.Name);
+                Assert.AreEqual(NodeType.Primitive, node.NodeType);
+                Assert.AreEqual(null, node.Parent);
+                Assert.AreEqual(expected.Repetition, node.Repetition);
 
-                    Assert.AreEqual(expected.ColumnOrder, primitive.ColumnOrder);
-                    Assert.AreEqual(expected.PhysicalType, primitive.PhysicalType);
-                    Assert.AreEqual(expected.Length, primitive.TypeLength);
-                    Assert.AreEqual(expected.LogicalType, primitive.LogicalType);
-                }
+                var primitive = (PrimitiveNode) node;
+
+                Assert.AreEqual(expected.ColumnOrder, primitive.ColumnOrder);
+                Assert.AreEqual(expected.PhysicalType, primitive.PhysicalType);
+                Assert.AreEqual(expected.Length, primitive.TypeLength);
+                Assert.AreEqual(expected.LogicalType, primitive.LogicalType);
             }
 
             var groupNode = Column.CreateSchemaNode(columns.ToArray());
