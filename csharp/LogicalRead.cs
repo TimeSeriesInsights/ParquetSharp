@@ -117,12 +117,13 @@ namespace ParquetSharp
 
             if (typeof(TLogical) == typeof(DateTime))
             {
-                switch (((TimestampLogicalType) logicalType).TimeUnit)
+                var timestampLogicalType = (TimestampLogicalType)logicalType;
+                switch (timestampLogicalType.TimeUnit)
                 {
                     case TimeUnit.Millis:
-                        return (Converter) (Delegate) (LogicalRead<DateTime, long>.Converter) ((s, dl, d, nl) => ConvertDateTimeMillis(s, d));
+                        return (Converter) (Delegate) (LogicalRead<DateTime, long>.Converter) ((s, dl, d, nl) => ConvertDateTimeMillis(s, d, timestampLogicalType.IsAdjustedToUtc));
                     case TimeUnit.Micros:
-                        return (Converter) (Delegate) (LogicalRead<DateTime, long>.Converter) ((s, dl, d, nl) => ConvertDateTimeMicros(s, d));
+                        return (Converter) (Delegate) (LogicalRead<DateTime, long>.Converter) ((s, dl, d, nl) => ConvertDateTimeMicros(s, d, timestampLogicalType.IsAdjustedToUtc));
                 }
             }
 
@@ -133,12 +134,13 @@ namespace ParquetSharp
 
             if (typeof(TLogical) == typeof(DateTime?))
             {
-                switch (((TimestampLogicalType) logicalType).TimeUnit)
+                var timestampLogicalType = (TimestampLogicalType)logicalType;
+                switch (timestampLogicalType.TimeUnit)
                 {
                     case TimeUnit.Millis:
-                        return (Converter) (Delegate) (LogicalRead<DateTime?, long>.Converter) ConvertDateTimeMillis;
+                        return (Converter)(Delegate)(LogicalRead<DateTime?, long>.Converter)((s, dl, d, nl) => ConvertDateTimeMillis(s, dl, d, nl, timestampLogicalType.IsAdjustedToUtc));
                     case TimeUnit.Micros:
-                        return (Converter) (Delegate) (LogicalRead<DateTime?, long>.Converter) ConvertDateTimeMicros;
+                        return (Converter)(Delegate)(LogicalRead<DateTime?, long>.Converter)((s, dl, d, nl) => ConvertDateTimeMicros(s, dl, d, nl, timestampLogicalType.IsAdjustedToUtc));
                     case TimeUnit.Nanos:
                         return (Converter) (Delegate) (LogicalRead<TPhysical?, TPhysical>.Converter) ConvertNative;
                 }
@@ -292,39 +294,59 @@ namespace ParquetSharp
             }
         }
 
-        private static void ConvertDateTimeMicros(ReadOnlySpan<long> source, Span<DateTime> destination)
+        private static void ConvertDateTimeMicros(ReadOnlySpan<long> source, Span<DateTime> destination, bool isAdjustedToUtc)
         {
             for (int i = 0; i != destination.Length; ++i)
             {
-                destination[i] = DateTime.FromBinary(DateTimeOffset + source[i] * (TimeSpan.TicksPerMillisecond / 1000));
+                destination[i] = new DateTime(DateTimeOffset + source[i] * (TimeSpan.TicksPerMillisecond / 1000), isAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified);
             }
         }
 
-        private static void ConvertDateTimeMicros(ReadOnlySpan<long> source, ReadOnlySpan<short> defLevels, Span<DateTime?> destination, short nullLevel)
+        private static void ConvertDateTimeMicros(ReadOnlySpan<long> source, ReadOnlySpan<short> defLevels, Span<DateTime?> destination, short nullLevel, bool isAdjustedToUtc)
         {
             for (int i = 0, src = 0; i != destination.Length; ++i)
             {
                 destination[i] = defLevels[i] == nullLevel
                     ? default(DateTime?)
-                    : DateTime.FromBinary(DateTimeOffset + source[src++] * (TimeSpan.TicksPerMillisecond / 1000));
+                    : new DateTime(DateTimeOffset + source[src++] * (TimeSpan.TicksPerMillisecond / 1000), isAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified);
             }
         }
 
-        private static void ConvertDateTimeMillis(ReadOnlySpan<long> source, Span<DateTime> destination)
-        {
-            for (int i = 0; i != destination.Length; ++i)
-            {
-                destination[i] = DateTime.FromBinary(DateTimeOffset + source[i] * TimeSpan.TicksPerMillisecond);
-            }
-        }
-
-        private static void ConvertDateTimeMillis(ReadOnlySpan<long> source, ReadOnlySpan<short> defLevels, Span<DateTime?> destination, short nullLevel)
+        private static void ConvertDateTimeMicrosAdjustedToUtc(ReadOnlySpan<long> source, ReadOnlySpan<short> defLevels, Span<DateTime?> destination, short nullLevel)
         {
             for (int i = 0, src = 0; i != destination.Length; ++i)
             {
                 destination[i] = defLevels[i] == nullLevel
                     ? default(DateTime?)
-                    : DateTime.FromBinary(DateTimeOffset + source[src++] * TimeSpan.TicksPerMillisecond);
+                    : new DateTime(DateTimeOffset + source[src++] * (TimeSpan.TicksPerMillisecond / 1000), DateTimeKind.Utc);
+            }
+        }
+
+        private static void ConvertDateTimeMillis(ReadOnlySpan<long> source, Span<DateTime> destination, bool isAdjustedToUtc)
+        {
+            for (int i = 0; i != destination.Length; ++i)
+            {
+                destination[i] = new DateTime(DateTimeOffset + source[i] * TimeSpan.TicksPerMillisecond, isAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified);
+            }
+        }
+
+        private static void ConvertDateTimeMillis(ReadOnlySpan<long> source, ReadOnlySpan<short> defLevels, Span<DateTime?> destination, short nullLevel, bool isAdjustedToUtc)
+        {
+            for (int i = 0, src = 0; i != destination.Length; ++i)
+            {
+                destination[i] = defLevels[i] == nullLevel
+                    ? default(DateTime?)
+                    : new DateTime(DateTimeOffset + source[src++] * TimeSpan.TicksPerMillisecond, isAdjustedToUtc ? DateTimeKind.Utc : DateTimeKind.Unspecified);
+            }
+        }
+
+        private static void ConvertDateTimeMillisAdjustedToUtc(ReadOnlySpan<long> source, ReadOnlySpan<short> defLevels, Span<DateTime?> destination, short nullLevel)
+        {
+            for (int i = 0, src = 0; i != destination.Length; ++i)
+            {
+                destination[i] = defLevels[i] == nullLevel
+                    ? default(DateTime?)
+                    : new DateTime(DateTimeOffset + source[src++] * TimeSpan.TicksPerMillisecond, DateTimeKind.Utc);
             }
         }
 
